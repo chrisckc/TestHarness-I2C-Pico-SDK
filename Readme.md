@@ -39,6 +39,9 @@ Serial communications occurring during reception of i2c data increased the error
 
 Serial communications just before to the reception of i2c data also increased the error rate, but less so.
 
-To fix the issue, go to line 61 in the i2c_slave library:
+**To fix the issue**
+Go to line 61 in the i2c_slave library:
+
 pico_i2c_slave/i2c_slave/i2c_slave.c
+
 and uncomment the improved version of the i2c_slave_irq_handler function, it is not clear why this seems to fix the issue, the re-ordering of the IRQ flag checks seems to be the main thing that reduces the error rate.
