@@ -41,11 +41,12 @@ unsigned int seconds = 0, lastSeconds = 0;
 unsigned int receiveCounter = 0, lastReceiveCount = 0, receiveRate = 0, receiveErrorCount = 0, sendCounter = 0, sendErrorCount = 0;
 unsigned int receivedBytesErrorCount = 0;
 
-volatile unsigned int _startByte = 0; // A pre-agreed start byte between the sender and receiver, not implemented yet.
 volatile uint8_t _byte = 0;
 volatile unsigned int _byteIndex = 0, _expectedByteCount = 0, _bytesReceived = 0;
-volatile bool i2cDataReady = false, i2cDataRequested = false;
-volatile unsigned int  bytesAvailable = 0, bytesExpected = 0;
+volatile unsigned int _byteRequestedIndex = 0;
+
+volatile bool i2cDataReady = false, i2cDataRequested = false, i2cDataRequestCompleted = 0;
+volatile unsigned int  bytesAvailable = 0, bytesExpected = 0, bytesSent = 0;
 unsigned int lastBytesAvailable = 0, lastBytesExpected = 0;
 
 void printBuffer(uint8_t buf[], size_t len) {
@@ -94,19 +95,23 @@ static void i2c_slave_handler(i2c_inst_t *i2c, i2c_slave_event_t event) {
         _byte = i2c_read_byte(i2c);
         in_buf[_byteIndex] = _byte;
         _byteIndex++;
+        i2cDataRequested = false;
         gpio_put(DEBUG_PIN2, 1); // signal the end of the interrupt
         break;
     case I2C_SLAVE_REQUEST: // master is requesting data
         gpio_put(DEBUG_PIN4, 0); // signal the start of the interrupt
-        //i2c_write_byte(i2c, 0xff); // dummy data
-        i2cDataRequested = true;
+        if (_byteRequestedIndex == 0) i2cDataRequested = true;
+        if (_byteRequestedIndex >= BUF_LEN) _byteRequestedIndex = 0;
+        i2c_write_byte(i2c, out_buf[_byteRequestedIndex]); // dummy data
+        _byteRequestedIndex++;
         gpio_put(DEBUG_PIN4, 1); // signal the end of the interrupt
         break;
     case I2C_SLAVE_FINISH: // master has signalled Stop / Restart
         gpio_put(DEBUG_PIN3, 0); // signal the start of the interrupt
-        // if we only received a single byte, this is the prefix byte indicating the size of the buffer to be transferred next
+        // if we only received a single byte, this is the prefix or command byte indicating the size of the buffer to be transferred next from the master
+        // It can also be a command to indicate the size of the buffer the master wants to read back, serviced by the I2C_SLAVE_REQUEST case
         if (_byteIndex == 1) {
-            bytesExpected = _byte;
+            bytesExpected = _byte; // this can also indicate the number of bytes requested
             in_buf[_byteIndex] = 0; // erase the buffer at the first location
             bytesAvailable = 0;
         } else {
@@ -114,6 +119,12 @@ static void i2c_slave_handler(i2c_inst_t *i2c, i2c_slave_event_t event) {
             i2cDataReady = true;
         }
         _byteIndex = 0;
+        // check if this is a finish event due to a request
+        if (_byteRequestedIndex > 0) {
+            i2cDataRequestCompleted = true;
+            bytesSent = _byteRequestedIndex;
+            _byteRequestedIndex = 0;
+        }
         gpio_put(DEBUG_PIN3, 1); // signal the end of the interrupt
         break;
     default:
@@ -316,19 +327,27 @@ int main() {
 
             // alternative method
             //sendBufferToMasterUsingFifo(BUF_LEN);
+            //gpio_put(DEBUG_PIN3, 1);
 
+            if (bytesExpected == BUF_LEN) {
+                if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
+                    printf("I2C Receiver says: Responding to Request from the Sender (master) for the Output buffer... (page %u, bytes requested: %03u) \r\n", receiveCounter, bytesExpected);
+                }
+            } else {
+                sendErrorCount++;
+                if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
+                    printf("I2C Receiver says: ERROR!!! Unexpected number of bytes requested from the Sender (master) for the Output buffer...  (page %u, bytes requested: %03u) \r\n", receiveCounter, bytesExpected);
+                }
+            }
             i2cDataRequested = false;
+        }
+        if (i2cDataRequestCompleted) {
             gpio_put(DEBUG_PIN3, 1);
-
-            // if (bytesSent == BUF_LEN) {
-            //     printf("I2C Receiver says: Responded with Output buffer page %u, buffer size: %03u \r\n", receiveCounter, BUF_LEN);
-            // } else if (bytesSent == 0) {
-            //     sendErrorCount++;
-            //     printf("I2C Receiver says: ERROR!!! Could not Respond with Output buffer page %u,  Couldn't write to slave, please check your wiring! \r\n", receiveCounter);
-            // } else {
-            //     sendErrorCount++;
-            //     printf("I2C Receiver says: ERROR!!! Output buffer page %u, was not fully sent, bytesSent: %d \r\n", receiveCounter, bytesSent);
-            // }
+            sendCounter++;
+            if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
+                printf("I2C Receiver says: Responded to Request from the Sender (master) for the Output buffer  (page %u, bytesSent: %03u) \r\n", sendCounter, bytesSent);
+            }
+            i2cDataRequestCompleted = false;
         }
     }
 }

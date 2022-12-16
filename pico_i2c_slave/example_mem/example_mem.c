@@ -126,7 +126,18 @@ static void run_master() {
 
 int main() {
     stdio_init_all();
-    puts("\nI2C slave example");
+
+    int startupDelay = 9;
+    for (int i = 1; i <= startupDelay; ++i) {
+        printf("Waiting %d seconds to start: %d\r\n", startupDelay, i);
+        sleep_ms(1000);
+    }
+    printf("\e[2J\e[H"); // clear screen and go to home position
+
+    printf("\nI2C slave example");
+    printf("rp2040_chip_version: %u \r\n", rp2040_chip_version());
+    printf("rp2040_rom_version: %u \r\n", rp2040_rom_version());
+    printf("get_core_num: %u \r\n\r\n", get_core_num());
 
     setup_slave();
     run_master();
