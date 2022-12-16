@@ -39,7 +39,7 @@ Serial communications occurring during reception of i2c data increased the error
 
 Serial communications just before to the reception of i2c data also increased the error rate, but less so.
 
-**To fix the issue**
+#### To fix the issue
 Go to line 61 in the i2c_slave library:
 
 pico_i2c_slave/i2c_slave/i2c_slave.c
