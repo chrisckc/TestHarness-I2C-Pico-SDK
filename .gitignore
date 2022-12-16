@@ -1,0 +1,9 @@
+.idea
+!.vscode
+/.vscode/*
+!/.vscode/settings.json
+_deps
+cmake-*
+build
+.DS_Store
+*.pdf

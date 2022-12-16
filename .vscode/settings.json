@@ -1,0 +1,14 @@
+{
+    "cmake.generator": "Unix Makefiles",
+    "cmake.configureEnvironment": {
+        "PICO_SDK_PATH": "../../pico-sdk"
+    },
+    "cmake.environment": {
+        "PICO_SDK_PATH": "../../pico-sdk"
+    },
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "files.associations": {
+        "irq.h": "c",
+        "i2c.h": "c"
+    }
+}
