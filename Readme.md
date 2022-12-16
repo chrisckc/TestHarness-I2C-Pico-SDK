@@ -6,7 +6,7 @@
 https://github.com/raspberrypi/pico-examples/tree/master/spi/spi_master_slave
 
 It  uses this i2c slave library:
-https://github.com/vmilea/pico_i2c_slave`
+https://github.com/vmilea/pico_i2c_slave
 
 
 ### I have modified the way the example operates to first send a separate, single byte, data transfer before the buffer is transferred. The output and input buffers have also been reduced from 256 bytes to 255.
@@ -20,9 +20,7 @@ In order to properly view the serial output you will need to use a proper termin
 The Sender Pico sends a single value to the Receiver Pico via the I2C, in this case the length of the buffer to be sent next.
 Immediately after this it sends the 255 byte buffer, (this was 256 bytes in the original SPI master-slave example).
 
-Currently this is a one way only transfer unlike the SPI master-slave example.
-I am working on making this a 2 way transfer by making the I2C master request data back from the slave Pico after sending its buffer to the slave Pico.
-
+The Sender, Master Pico then sends an I2C "Read" request to the Slave Pico to ask for its own buffer, like a register read for a normal I2C slave device. The Slave Pico then responds with its own buffer.
 ### The issue
 
 Intermittent missing data was observed on the receiving Pico during the i2c communications, the error rate seems to depend on the i2c clock speed and other factors such as how much serial communications is taking place and when these communications take place relative to the i2c communications.
