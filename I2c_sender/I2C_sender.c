@@ -24,11 +24,11 @@
 // Serial data output and debugging options
 #define DEBUG_SERIAL_OUTPUT_SCROLLING (false) // If not scrolling the terminal position is reset using escape sequences, proper terminal emulator required
 #define DEBUG_SERIAL_OUTPUT_PAGE_LIMIT (0) // Set to zero to show all pages
-#define DEBUG_SERIAL_OUTPUT_DURING_I2C_READ (false) // Set to false to prevent USB Serial debug output during I2C data reception
+#define DEBUG_SERIAL_DURING_I2C_REQUEST (false) // Set to false to prevent USB Serial debug output during I2C data reception
 
 #define I2C_INSTANCE i2c1 // Valid pins below must be used for each i2c instance
-#define I2C_SLAVE_SDA_PIN (6u)
-#define I2C_SLAVE_SCL_PIN (7u)
+#define I2C_MASTER_SDA_PIN (6u)
+#define I2C_MASTER_SCL_PIN (7u)
 #define I2C_SLAVE_ADDRESS (0x30)
 //#define I2C_BAUDRATE      (400000u)  // 400 kHz
 #define I2C_BAUDRATE      (1000000u) // 1 MHz
@@ -93,7 +93,6 @@ int sendBufferToSlave(uint8_t length) {
     }
     gpio_put(DEBUG_PIN3, 0);
     // First send the data length of the buffer so the i2c slave knows what to expect next
-    // This seems to just hang after a failed i2c_read_timeout_us during readBufferFromSlave()
     int byteCount = i2c_write_blocking(I2C_INSTANCE, I2C_SLAVE_ADDRESS, &length, 1, false);
     if (byteCount < 0) {
         if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
@@ -114,7 +113,7 @@ int sendBufferToSlave(uint8_t length) {
     gpio_put(DEBUG_PIN3, 1);
     sendCounter++;
     if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
-        if (DEBUG_SERIAL_OUTPUT_DURING_I2C_READ) {
+        if (DEBUG_SERIAL_DURING_I2C_REQUEST) {
             // If USB Serial is sent, it may still be on its way out of a FIFO while the code continues from from here onto the I2C read operation
             printf("I2C Sender says: Output buffer page %u sent, buffer size: %03u \r\n", sendCounter, length);
         }
@@ -165,14 +164,14 @@ void resetAllRxVars() {
 }
 
 static void setupMaster() {
-    gpio_init(I2C_SLAVE_SDA_PIN);
-    gpio_set_function(I2C_SLAVE_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_init(I2C_MASTER_SDA_PIN);
+    gpio_set_function(I2C_MASTER_SDA_PIN, GPIO_FUNC_I2C);
     // pull-ups are already active on slave side, this is just a fail-safe in case the wiring is faulty
-    gpio_pull_up(I2C_SLAVE_SDA_PIN);
+    gpio_pull_up(I2C_MASTER_SDA_PIN);
 
-    gpio_init(I2C_SLAVE_SCL_PIN);
-    gpio_set_function(I2C_SLAVE_SCL_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(I2C_SLAVE_SCL_PIN);
+    gpio_init(I2C_MASTER_SCL_PIN);
+    gpio_set_function(I2C_MASTER_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C_MASTER_SCL_PIN);
 
     i2c_init(I2C_INSTANCE, I2C_BAUDRATE);
 }
@@ -188,10 +187,11 @@ int main() {
     }
     printf("\e[2J\e[H"); // clear screen and go to home position
 
-    printf("I2C Sender example using i2c baud rate: %d \r\n", I2C_BAUDRATE);
+    printf("I2C Sender Pico-SDK example using i2c baud rate: %d \r\n", I2C_BAUDRATE);
     printf("rp2040_chip_version: %u \r\n", rp2040_chip_version());
     printf("rp2040_rom_version: %u \r\n", rp2040_rom_version());
-    printf("get_core_num: %u \r\n\r\n", get_core_num());
+    printf("get_core_num: %u \r\n", get_core_num());
+    printf("DEBUG_SERIAL_DURING_I2C_REQUEST: %s \r\n\r\n", DEBUG_SERIAL_DURING_I2C_REQUEST ? "true" : "false");
 
     // Init the onboard LED
     gpio_set_function(LED_BUILTIN, GPIO_FUNC_SIO);
@@ -214,6 +214,11 @@ int main() {
     gpio_init(DEBUG_PIN4);
     gpio_set_dir(DEBUG_PIN4, GPIO_OUT);
     gpio_put(DEBUG_PIN4, DEBUG_PIN_INITIAL_STATE);
+
+    gpio_set_function(DEBUG_PIN5, GPIO_FUNC_SIO);
+    gpio_init(DEBUG_PIN5);
+    gpio_set_dir(DEBUG_PIN5, GPIO_OUT);
+    gpio_put(DEBUG_PIN5, DEBUG_PIN_INITIAL_STATE);
 
     sleep_us(10); // delay so we can easily see the debug pulse
     gpio_put(DEBUG_PIN3, 0); // signal the start of I2C config
@@ -274,7 +279,7 @@ int main() {
                 // Reset the previous terminal position if we are not scrolling the output
                 if (!DEBUG_SERIAL_OUTPUT_SCROLLING) {
                     printf("\e[H"); // move to the home position, at the upper left of the screen
-                    printf("\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
+                    printf("\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
                 }
                 // Print the header info
                 printf("\r\nSeconds: %07u.%03u       \r\n", seconds, currentMillis - startMillis - (seconds * 1000));
@@ -295,6 +300,8 @@ int main() {
             if (bytesSent < BUF_LEN) {
                 sendErrorCount++;
             }
+
+            sleep_us(80);
 
             // Request the buffer from the Receiver
             bytesRequested = BUF_LEN;

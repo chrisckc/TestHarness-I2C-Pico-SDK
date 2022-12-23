@@ -24,6 +24,8 @@
 // Serial data output and debugging options
 #define DEBUG_SERIAL_OUTPUT_SCROLLING (false) // If not scrolling the terminal position is reset using escape sequences, proper terminal emulator required
 #define DEBUG_SERIAL_OUTPUT_PAGE_LIMIT (0) // Set to zero to show all pages
+#define DEBUG_SERIAL_DURING_I2C_RECEIVE (true)
+#define DEBUG_SERIAL_DURING_I2C_RESPONSE (true)
 
 #define I2C_INSTANCE i2c0 // Valid pins below must be used for each i2c instance
 #define I2C_SLAVE_SDA_PIN (4u)
@@ -48,7 +50,7 @@ volatile unsigned int _byteRequestedIndex = 0;
 volatile bool _i2cDataReceiveInProgress = false, _i2cDataRequestInProgress = false;
 
 volatile bool i2cDataReady = false, i2cDataRequested = false, i2cDataRequestCompleted = false;
-volatile unsigned int  bytesAvailable = 0, bytesExpected = 0, bytesSent = 0;
+volatile unsigned int  bytesAvailable = 0, bytesExpectedOrRequested = 0, bytesSent = 0;
 unsigned int lastBytesAvailable = 0, lastBytesExpected = 0;
 
 void printBuffer(uint8_t buf[], size_t len) {
@@ -66,20 +68,19 @@ void printBuffer(uint8_t buf[], size_t len) {
     }
 }
 
-bool verifyInBuffer(unsigned int page, bool printOnlyFirstError) {
-    bool success = true;
+unsigned int verifyInBuffer(unsigned int page, bool printOnlyFirstError) {
+    int errorCount = 0;
     for (uint8_t i = 0; i < BUF_LEN; ++i) {
         if (in_buf[i] != i + 1) {
-            receivedBytesErrorCount++;
-            if (success && printOnlyFirstError) {
+            if (errorCount == 0 && printOnlyFirstError) {
                 printf("ERROR! page: %07u First Error at index: %03u expected: 0x%02X received: 0x%02X    \r\n", page, i, i + 1, in_buf[i]);
             } else if (!printOnlyFirstError) {
                 printf("ERROR! page: %07u index: %03u expected: 0x%02X received: 0x%02X    \r\n", page, i, i + 1, in_buf[i]);
             }
-            success = false;
+            errorCount++;
         }
     }
-    return success;
+    return errorCount;
 }
 
 void clearBuffer(uint8_t buf[], size_t len) {
@@ -111,20 +112,29 @@ static void i2c_slave_handler(i2c_inst_t *i2c, i2c_slave_event_t event) {
         i2c_write_byte(i2c, out_buf[_byteRequestedIndex]); // send the requested data, the i2c_write_byte function is used in the example provided in the library
         _i2cDataRequestInProgress = true;
         if (_byteRequestedIndex == 0) i2cDataRequested = true; // only set this once at the start
+        _byteRequestedIndex++;
         if (_byteRequestedIndex >= BUF_LEN) {
             bytesSent += _byteRequestedIndex; // just roll-over the buffer
             _byteRequestedIndex = 0;
         }
-        _byteRequestedIndex++;
         gpio_put(DEBUG_PIN4, 1); // signal the end of the interrupt
         break;
     case I2C_SLAVE_FINISH: // master has signalled Stop / Restart
         gpio_put(DEBUG_PIN3, 0); // signal the start of the interrupt
+        // check if this is a finish event due to a read request from the master
+        if (_i2cDataRequestInProgress) {
+            bytesSent += _byteRequestedIndex;
+            _byteRequestedIndex = 0;
+            _i2cDataRequestInProgress = false;
+            i2cDataRequestCompleted = true;
+        }
+        // check if this is a finish event due to a receive from the master
         if (_i2cDataReceiveInProgress) {
             // if we only received a single byte, this is the prefix or command byte indicating the size of the buffer to be transferred next from the master
             // It can also be a command to indicate the size of the buffer the master wants to read back, serviced by the I2C_SLAVE_REQUEST case
             if (_byteIndex == 1) {
-                bytesExpected = _byte; // this can also indicate the number of bytes requested
+                bytesExpectedOrRequested = _byte; // this can also indicate the number of bytes requested
+                bytesSent = 0;
             } else {
                 bytesAvailable = _byteIndex;
                 i2cDataReady = true;
@@ -132,47 +142,11 @@ static void i2c_slave_handler(i2c_inst_t *i2c, i2c_slave_event_t event) {
             _byteIndex = 0;
             _i2cDataReceiveInProgress = false;
         }
-        // check if this is a finish event due to a read request from the master
-        if (_i2cDataRequestInProgress) {
-            i2cDataRequestCompleted = true;
-            bytesSent += _byteRequestedIndex;
-            _byteRequestedIndex = 0;
-            _i2cDataRequestInProgress = false;
-        }
         gpio_put(DEBUG_PIN3, 1); // signal the end of the interrupt
         break;
     default:
         break;
     }
-}
-
-// This method just hangs on i2c_write_blocking, maybe this function is not supported in slave mode?
-int sendBufferToMaster(uint8_t length) {
-    if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
-        printf("I2C Receiver says: Sending Response Output buffer...  (page %u, buffer size: %03u) \r\n", sendCounter, length);
-    }
-    gpio_put(DEBUG_PIN3, 0);
-    // First send the data length of the buffer so the other side knows what to expect next
-    int byteCount = i2c_write_blocking(I2C_INSTANCE, I2C_SLAVE_ADDRESS, &length, 1, false);
-    if (byteCount < 0) {
-        if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
-            printf("I2C Receiver says: ERROR!!! Could not send Output buffer size for page %u, Couldn't write to slave, please check your wiring! \r\n", sendCounter);
-        }
-        gpio_put(DEBUG_PIN3, 1);
-        return 0;
-    }
-    // Now send the buffer
-    byteCount = i2c_write_blocking(I2C_INSTANCE, I2C_SLAVE_ADDRESS, out_buf, length, false);
-    if (byteCount < 0) {
-        if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
-            printf("I2C Receiver says: ERROR!!! Could not send Output buffer page %u, Couldn't write to slave, please check your wiring! \r\n", sendCounter);
-        }
-        gpio_put(DEBUG_PIN3, 1);
-        return 0;
-    }
-    gpio_put(DEBUG_PIN3, 1);
-    sendCounter++;
-    return byteCount;
 }
 
 // uses https://github.com/vmilea/pico_i2c_slave
@@ -201,10 +175,12 @@ int main() {
     }
     printf("\e[2J\e[H"); // clear screen and go to home position
 
-    printf("I2C receiver example using i2c baud rate: %d \r\n", I2C_BAUDRATE);
+    printf("I2C receiver Pico-SDK example using i2c baud rate: %d \r\n", I2C_BAUDRATE);
     printf("rp2040_chip_version: %u \r\n", rp2040_chip_version());
     printf("rp2040_rom_version: %u \r\n", rp2040_rom_version());
-    printf("get_core_num: %u \r\n\r\n", get_core_num());
+    printf("get_core_num: %u \r\n", get_core_num());
+    printf("DEBUG_SERIAL_DURING_I2C_RECEIVE: %s \r\n", DEBUG_SERIAL_DURING_I2C_RECEIVE ? "true" : "false");
+    printf("DEBUG_SERIAL_DURING_I2C_RESPONSE: %s \r\n\r\n", DEBUG_SERIAL_DURING_I2C_RESPONSE ? "true" : "false");
 
     // Init the onboard LED
     gpio_set_function(LED_BUILTIN, GPIO_FUNC_SIO);
@@ -228,6 +204,11 @@ int main() {
     gpio_set_dir(DEBUG_PIN4, GPIO_OUT);
     gpio_put(DEBUG_PIN4, DEBUG_PIN_INITIAL_STATE);
 
+    gpio_set_function(DEBUG_PIN5, GPIO_FUNC_SIO);
+    gpio_init(DEBUG_PIN5);
+    gpio_set_dir(DEBUG_PIN5, GPIO_OUT);
+    gpio_put(DEBUG_PIN5, DEBUG_PIN_INITIAL_STATE);
+
     sleep_us(10); // delay so we can easily see the debug pulse
     gpio_put(DEBUG_PIN3, 0); // signal the start of I2C config
 
@@ -248,12 +229,12 @@ int main() {
 
     unsigned long startMillis = to_ms_since_boot(get_absolute_time());
     unsigned long currentMillis = 0;
-    int bytesSent = 0;
+    unsigned int verifyErrorCount = 0;
 
     // Loop for ever...
     for (size_t i = 0; ; ++i) {
         // Check if we have all the expected data gathered by the receive interrupts
-        if (i2cDataReady) {
+        if (i2cDataReady && (i2cDataRequestCompleted || DEBUG_SERIAL_DURING_I2C_RESPONSE)) {
             gpio_put(LED_BUILTIN, 1); // turn on the LED
             if (bytesAvailable == 0) {
                 printf("ERROR!!! Received empty transmission from the Sender (master) page: %u bytesAvailable: %03u                              \r\n", receiveCounter, bytesAvailable);
@@ -269,12 +250,12 @@ int main() {
                     lastReceiveCount = receiveCounter;
                 }
 
-                gpio_put(DEBUG_PIN3, 0);
+                gpio_put(DEBUG_PIN5, 0);
                 if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
                     // Reset the previous terminal position if we are not scrolling the output
                     if (!DEBUG_SERIAL_OUTPUT_SCROLLING) {
                         printf("\e[H"); // move to the home position, at the upper left of the screen
-                        printf("\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
+                        printf("\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
                     }
                     // Print the header info
                     printf("\r\nSeconds: %07u.%03u       \r\n", seconds, currentMillis - startMillis - (seconds * 1000));
@@ -289,52 +270,73 @@ int main() {
                     printf("Data Received...                                                                \r\n");
 
                     // print data to the serial port
-                    printf("I2C Receiver says: read page %u from the sender, received page size: %03u expected: %03u lastExpected: %03u \r\n", receiveCounter, bytesAvailable, bytesExpected, lastBytesExpected);
+                    printf("I2C Receiver says: read page %u from the sender, received page size: %03u expected: %03u lastExpected: %03u \r\n", receiveCounter, bytesAvailable, bytesExpectedOrRequested, lastBytesExpected);
                     // Write the input buffer out to the USB serial port
                     printBuffer(in_buf, BUF_LEN);
 
                     printf("I2C Receiver says: Verifying received data...                           \r\n");
-                    if (bytesExpected != BUF_LEN) {
+                    if (bytesExpectedOrRequested != BUF_LEN) {
                         receiveErrorCount++;
-                        printf("ERROR!!! page: %u bytesExpected: %03u should equal the Buffer Length: %03u                               \r\n", receiveCounter, bytesExpected, BUF_LEN);
+                        printf("ERROR!!! page: %u bytesExpected: %03u should equal the Buffer Length: %03u                               \r\n", receiveCounter, bytesExpectedOrRequested, BUF_LEN);
                     }
-                    bool verifySuccess = verifyInBuffer(receiveCounter, false);
+                    verifyErrorCount = verifyInBuffer(receiveCounter, false);
+                    receivedBytesErrorCount += verifyErrorCount;
                     // Check that we only record the error once for each receive cycle
-                    if (bytesExpected == BUF_LEN && !verifySuccess) receiveErrorCount++;
+                    if (bytesExpectedOrRequested == BUF_LEN && verifyErrorCount > 0) receiveErrorCount++;
                 }
                 clearBuffer(in_buf, BUF_LEN);
-                lastBytesExpected = bytesExpected;
-                i2cDataReady = false;
+                lastBytesExpected = bytesExpectedOrRequested;
                 bytesAvailable = 0;
-                gpio_put(DEBUG_PIN3, 1);
+                gpio_put(DEBUG_PIN5, 1);
             }
+            // Reset the flag
+            i2cDataReady = false;
             gpio_put(LED_BUILTIN, 0); // turn off the LED
         }
-        if (i2cDataRequested) {
+        if (!i2cDataReady && i2cDataRequested && (i2cDataRequestCompleted || DEBUG_SERIAL_DURING_I2C_RESPONSE)) {
             sleep_us(10); // delay so we can easily see the debug pulse
-            gpio_put(DEBUG_PIN3, 0);
-
-            printf("\r\n\n\n\n"); // leave some room for error report lines
-            if (bytesExpected == BUF_LEN) {
-                if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
-                    printf("I2C Receiver says: Responding to Request from the Sender (master) for the Output buffer... (page %u, bytes requested: %03u) \r\n", receiveCounter, bytesExpected);
-                }
+            gpio_put(DEBUG_PIN5, 0);
+            // Leave room for up to 4 previous error report lines not to be overwritten
+            for (int v = 1; v <= 4; ++v) {
+                if (v > verifyErrorCount) printf("\n");
+            }
+            if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
+                printf("I2C Receiver says: Responding to Request from the Sender (master) for the Output buffer... (page %u, bytes requested: %03u)                         \r\n", receiveCounter, bytesExpectedOrRequested);
+            }
+            if (bytesExpectedOrRequested == BUF_LEN) {
+                printf("\r\n");
             } else {
                 sendErrorCount++;
                 if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
-                    printf("I2C Receiver says: ERROR!!! Unexpected number of bytes requested from the Sender (master) for the Output buffer...  (page %u, bytes requested: %03u) \r\n", receiveCounter, bytesExpected);
+                    printf("ERROR!!! Unexpected number of bytes requested by the Sender (master) for the Output buffer...  (page %u, bytes requested: %03u) \r\n", receiveCounter, bytesExpectedOrRequested);
                 }
             }
+            // Reset the flag
             i2cDataRequested = false;
         }
-        if (i2cDataRequestCompleted) {
-            gpio_put(DEBUG_PIN3, 1);
+        if (!i2cDataReady && !i2cDataRequested && i2cDataRequestCompleted) {
             sendCounter++;
             if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
-                printf("I2C Receiver says: Responded to Request from the Sender (master) for the Output buffer  (page %u, bytesSent: %03u) \r\n", sendCounter, bytesSent);
+                printf("I2C Receiver says: Responded to Request from the Sender (master) for the Output buffer  (page %u, bytesSent: %03u)          \r\n", sendCounter, bytesSent);
             }
+            if (bytesSent == bytesExpectedOrRequested) {
+                printf("\r\n");
+            } else {
+                sendErrorCount++;
+                if ((DEBUG_SERIAL_OUTPUT_PAGE_LIMIT == 0) || (receiveCounter <= DEBUG_SERIAL_OUTPUT_PAGE_LIMIT)) { // optionally only show the results up to DEBUG_SERIAL_OUTPUT_PAGE_LIMIT
+                    printf("ERROR!!! Responding to Request from the Sender (master) for the Output buffer, buffer not completely sent  (page %u, bytesSent: %03u) \r\n", sendCounter, bytesSent);
+                }
+            }
+            // Reset the flag
             i2cDataRequestCompleted = false;
-            printf("                                                                                                                           \r\n");
+            //printf("                                                                                                                              \r\n");
+            gpio_put(DEBUG_PIN5, 1);
+        }
+        if (DEBUG_SERIAL_DURING_I2C_RECEIVE && receiveCounter > 0) {
+            // Just keep printing something out of USB Serial every 100 uS, this will overlap with i2c receive.
+            // 100 uS is around 10 bytes received from i2c at 1MHz, so while receiving 255 bytes we will have decent overlap for testing
+            sleep_us(100);
+            printf(".");
         }
     }
 }
