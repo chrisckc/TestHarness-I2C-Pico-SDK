@@ -8,6 +8,7 @@
 #include "pico/time.h"
 #include "hardware/i2c.h"
 #include "hardware/irq.h"
+#include "pico/multicore.h"
 
 // https://github.com/vmilea/pico_i2c_slave
 #include <i2c_fifo.h>
@@ -33,6 +34,8 @@
 #define I2C_SLAVE_ADDRESS (0x30)
 //#define I2C_BAUDRATE      (400000u)  // 400 kHz
 #define I2C_BAUDRATE      (1000000u) // 1 MHz
+
+#define USE_SECOND_CORE (false) // enable the second core for I2C data reception
 
 #define BUF_LEN         0xFF // 255 byte buffer
 uint8_t bufferLength = BUF_LEN;
@@ -164,6 +167,12 @@ static void setupSlave() {
     i2c_slave_init(I2C_INSTANCE, I2C_SLAVE_ADDRESS, &i2c_slave_handler);
 }
 
+// Core 1 Main Code
+void core1_entry() {
+    setupSlave();
+}
+
+// Core 0 Main Code
 int main() {
     // Enable UART so we can print
     stdio_init_all();
@@ -213,7 +222,12 @@ int main() {
     gpio_put(DEBUG_PIN3, 0); // signal the start of I2C config
 
     // Setup the I2C hardware
+    #ifdef USE_SECOND_CORE
+    multicore_launch_core1(core1_entry); // Start core 1
+    #else
     setupSlave();
+    #endif
+
     gpio_put(DEBUG_PIN3, 1); // signal the end of I2C config
 
     // Initialize output buffer
@@ -337,6 +351,12 @@ int main() {
             // 100 uS is around 10 bytes received from i2c at 1MHz, so while receiving 255 bytes we will have decent overlap for testing
             sleep_us(100);
             printf(".");
+        }  else {
+            // if DEBUG_SERIAL_PORT_DURING_I2C_RECEIVE is false, we still need a delay here to allow the mutex's to work
+            // otherwise, at the top of loop we would be constantly grabbing the mutex and disabling interrupts
+            // due to the repeated calls to readBool(&i2cDataReady)
+            //delayMicroseconds(100);
+            //busy_wait_us(100);
         }
     }
 }

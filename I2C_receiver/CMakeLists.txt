@@ -4,7 +4,7 @@ if (TARGET tinyusb_device)
                 )
 
         # Pull in basic dependencies
-        target_link_libraries(I2C_receiver i2c_slave pico_stdlib hardware_i2c)
+        target_link_libraries(I2C_receiver i2c_slave pico_stdlib hardware_i2c pico_multicore)
 
         # enable USB output, disable UART output
         pico_enable_stdio_usb(I2C_receiver 1)
