@@ -352,11 +352,8 @@ int main() {
             sleep_us(100);
             printf(".");
         }  else {
-            // if DEBUG_SERIAL_PORT_DURING_I2C_RECEIVE is false, we still need a delay here to allow the mutex's to work
-            // otherwise, at the top of loop we would be constantly grabbing the mutex and disabling interrupts
-            // due to the repeated calls to readBool(&i2cDataReady)
-            //delayMicroseconds(100);
-            //busy_wait_us(100);
+            // delay even if DEBUG_SERIAL_DURING_I2C_RECEIVE is false
+            //sleep_us(100);
         }
     }
 }
